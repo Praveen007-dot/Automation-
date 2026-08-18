@@ -2,6 +2,7 @@ import os
 import logging
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.pool import NullPool
 
 logger = logging.getLogger(__name__)
 
@@ -12,17 +13,36 @@ if not DATABASE_URL:
     logger.warning("DATABASE_URL not set in environment. Falling back to local SQLite database.")
     DATABASE_URL = "sqlite:///local_hospital.db"
 
-# Replace postgres:// with postgresql:// if needed for SQLAlchemy compatibility
+# Replace postgres:// with postgres:// if needed for SQLAlchemy compatibility
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Configure SQLAlchemy Engine
-# Note: connect_args={"check_same_thread": False} is required only for SQLite
 connect_args = {}
-if DATABASE_URL.startswith("sqlite"):
-    connect_args = {"check_same_thread": False}
+is_sqlite = DATABASE_URL.startswith("sqlite")
+is_supabase = "supabase.com" in DATABASE_URL
 
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+if is_sqlite:
+    connect_args = {"check_same_thread": False}
+elif is_supabase:
+    # Supabase requires SSL; connect_timeout prevents hanging on bad credentials
+    connect_args = {
+        "sslmode": "require",
+        "connect_timeout": 10,
+    }
+
+# Use NullPool for Supabase transaction pooler (port 6543) to avoid
+# "prepared statement already exists" errors; fine for session pooler too
+if is_supabase:
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args=connect_args,
+        poolclass=NullPool,
+        pool_pre_ping=True,
+    )
+else:
+    engine = create_engine(DATABASE_URL, connect_args=connect_args)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
